@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Interactive Heart Particles</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: #050510;
+      overflow: hidden;
+      cursor: crosshair;
+      font-family: 'Segoe UI', system-ui, sans-serif;
+    }
+    canvas {
+      display: block;
+      position: absolute;
+      top: 0;
+      left: 0;
+    }
+    .hint {
+      position: absolute;
+      bottom: 30px;
+      left: 50%;
+      transform: translateX(-50%);
+      color: rgba(180, 200, 255, 0.45);
+      font-size: 14px;
+      letter-spacing: 1px;
+      pointer-events: none;
+      user-select: none;
+      z-index: 10;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="c"></canvas>
+  <div class="hint">Click anywhere to send heart</div>
+
+  <script>
+    const canvas = document.getElementById('c');
+    const ctx = canvas.getContext('2d');
+
+    let W, H;
+    function resize() {
+      W = canvas.width = window.innerWidth;
+      H = canvas.height = window.innerHeight;
+    }
+    window.addEventListener('resize', resize);
+    resize();
+
+    // ============ CONFIG ============
+    const PARTICLES_PER_HEART_BURST = 80;
+    const TRAIL_THROTTLE_MS = 40;
+    const HEART_SCALE = 14;          // size of the formed heart
+    const COLORS = [
+      '#4fc3f7', '#29b6f6', '#81d4fa', '#b3e5fc',
+      '#ce93d8', '#ba68c8', '#f48fb1', '#f06292',
+      '#80deea', '#4dd0e1', '#a5d6a7'
+    ];
+
+    // ============ HEART SHAPE MATH ============
+    function heartPoint(t, scale = 1) {
+      // classic parametric heart
+      const x = 16 * Math.pow(Math.sin(t), 3);
+      const y = -(13 * Math.cos(t) - 5 * Math.cos(2 * t) - 2 * Math.cos(3 * t) - Math.cos(4 * t));
+      return { x: x * scale, y: y * scale };
+    }
+
+    // pre-generate points for the big heart
+    const heartShapePoints = [];
+    for (let i = 0; i < 360; i++) {
+      const t = (i / 360) * Math.PI * 2;
+      heartShapePoints.push(heartPoint(t, HEART_SCALE));
+    }
+
+    // ============ CLASSES ============
+    class HeartParticle {
+      constructor(x, y, options = {}) {
+        this.x = x;
+        this.y = y;
+        this.formsHeartShape = options.formsHeartShape !== false;
+        this.lifespanFrames = options.lifespanFrames || (this.formsHeartShape ? 180 + Math.random() * 60 : 55);
+        this.age = 0;
+        this.velocityDamping = options.velocityDamping || 0.96;
+
+        if (this.formsHeartShape) {
+          // pick a random point on the heart curve
+          const pt = heartShapePoints[Math.floor(Math.random() * heartShapePoints.length)];
+          const offsetX = (Math.random() - 0.5) * 18;
+          const offsetY = (Math.random() - 0.5) * 18;
+          this.targetX = x + pt.x + offsetX;
+          this.targetY = y + pt.y + offsetY;
+
+          // start a bit away and fly toward the heart
+          const angle = Math.random() * Math.PI * 2;
+          const dist = 40 + Math.random() * 80;
+          this.x = x + Math.cos(angle) * dist;
+          this.y = y + Math.sin(angle) * dist;
+
+          this.vx = (this.targetX - this.x) * 0.04;
+          this.vy = (this.targetY - this.y) * 0.04;
+        } else {
+          // trail particle – just explode outward
+          const angle = Math.random() * Math.PI * 2;
+          const speed = 1 + Math.random() * 4;
+          this.vx = Math.cos(angle) * speed;
+          this.vy = Math.sin(angle) * speed - 1.5;
+          this.targetX = this.x;
+          this.targetY = this.y;
+        }
+
+        this.size = this.formsHeartShape ? 1.8 + Math.random() * 2.2 : 1.2 + Math.random() * 1.8;
+        this.color = COLORS[Math.floor(Math.random() * COLORS.length)];
+        this.alpha = 1;
+        this.glow = this.formsHeartShape ? 12 + Math.random() * 10 : 6;
+      }
+
+      update() {
+        this.age++;
+        if (this.formsHeartShape) {
+          // gently move toward target
+          this.vx += (this.targetX - this.x) * 0.015;
+          this.vy += (this.targetY - this.y) * 0.015;
+          this.vx *= this.velocityDamping;
+          this.vy *= this.velocityDamping;
+        } else {
+          this.vy += 0.04; // slight gravity
+          this.vx *= this.velocityDamping;
+          this.vy *= this.velocityDamping;
+        }
+
+        this.x += this.vx;
+        this.y += this.vy;
+
+        // fade out near end of life
+        const lifeRatio = this.age / this.lifespanFrames;
+        this.alpha = lifeRatio < 0.7 ? 1 : 1 - (lifeRatio - 0.7) / 0.3;
+      }
+
+      draw(ctx) {
+        if (this.alpha <= 0) return;
+        ctx.save();
+        ctx.globalAlpha = this.alpha;
+        ctx.shadowBlur = this.glow;
+        ctx.shadowColor = this.color;
+        ctx.fillStyle = this.color;
+        ctx.beginPath();
+        ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+      }
+
+      get dead() {
+        return this.age >= this.lifespanFrames || this.alpha <= 0;
+      }
+    }
+
+    class HeartMessage {
+      constructor(x, y) {
+        this.x = x;
+        this.y = y;
+        this.age = 0;
+        this.lifespan = 90;
+        this.alpha = 0;
+        this.scale = 0.3;
+        this.text = "I Love You";
+      }
+
+      update() {
+        this.age++;
+        const t = this.age / this.lifespan;
+        if (t < 0.2) {
+          this.alpha = t / 0.2;
+          this.scale = 0.3 + (t / 0.2) * 0.7;
+        } else if (t > 0.7) {
+          this.alpha = 1 - (t - 0.7) / 0.3;
+        } else {
+          this.alpha = 1;
+          this.scale = 1;
+        }
+        this.y -= 0.35; // slowly float up
+      }
+
+      draw(ctx) {
+        if (this.alpha <= 0) return;
+        ctx.save();
+        ctx.globalAlpha = this.alpha;
+        ctx.translate(this.x, this.y);
+        ctx.scale(this.scale, this.scale);
+        ctx.font = 'bold 28px "Segoe UI", system-ui, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.shadowBlur = 18;
+        ctx.shadowColor = '#81d4fa';
+        ctx.fillStyle = '#e3f2fd';
+        ctx.fillText(this.text, 0, 0);
+        ctx.restore();
+      }
+
+      get dead() {
+        return this.age >= this.lifespan;
+      }
+    }
+
+    // ============ STATE ============
+    const heartParticles = [];
+    const heartMessages = [];
+    let lastTrailTime = 0;
+
+    // ============ FUNCTIONS FROM THE SCREENSHOT ============
+    function triggerHeartBurst(x, y) {
+      for (let i = 0; i < PARTICLES_PER_HEART_BURST; i++) {
+        heartParticles.push(new HeartParticle(x, y));
+      }
+      heartMessages.push(new HeartMessage(x, y - 10));
+    }
+
+    function spawnTrailHeartParticle(x, y) {
+      const now = performance.now();
+      if (now - lastTrailTime < TRAIL_THROTTLE_MS) return;
+      lastTrailTime = now;
+      heartParticles.push(new HeartParticle(x, y, {
+        formsHeartShape: false,
+        lifespanFrames: 55,
+        velocityDamping: 0.15
+      }));
+    }
+
+    // ============ EVENTS ============
+    canvas.addEventListener('click', (e) => {
+      triggerHeartBurst(e.clientX, e.clientY);
+    });
+
+    canvas.addEventListener('mousemove', (e) => {
+      spawnTrailHeartParticle(e.clientX, e.clientY);
+    });
+
+    // touch support
+    canvas.addEventListener('touchstart', (e) => {
+      e.preventDefault();
+      const t = e.touches[0];
+      triggerHeartBurst(t.clientX, t.clientY);
+    }, { passive: false });
+
+    canvas.addEventListener('touchmove', (e) => {
+      e.preventDefault();
+      const t = e.touches[0];
+      spawnTrailHeartParticle(t.clientX, t.clientY);
+    }, { passive: false });
+
+    // ============ ANIMATION LOOP ============
+    function animate() {
+      // soft trail / fade
+      ctx.fillStyle = 'rgba(5, 5, 16, 0.18)';
+      ctx.fillRect(0, 0, W, H);
+
+      // update & draw particles
+      for (let i = heartParticles.length - 1; i >= 0; i--) {
+        const p = heartParticles[i];
+        p.update();
+        p.draw(ctx);
+        if (p.dead) heartParticles.splice(i, 1);
+      }
+
+      // update & draw messages
+      for (let i = heartMessages.length - 1; i >= 0; i--) {
+        const m = heartMessages[i];
+        m.update();
+        m.draw(ctx);
+        if (m.dead) heartMessages.splice(i, 1);
+      }
+
+      requestAnimationFrame(animate);
+    }
+
+    // start with one heart in the center
+    triggerHeartBurst(W / 2, H / 2 - 20);
+    animate();
+  </script>
+</body>
+  </html>
